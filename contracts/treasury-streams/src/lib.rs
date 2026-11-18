@@ -254,8 +254,6 @@ impl TreasuryStreamsContract {
             stream.total_streamed = stream.total_streamed
                 .checked_add(settled_amount)
                 .unwrap_or_else(|| env.panic_with_error(TreasuryStreamsError::ArithmeticOverflow));
-            // Soroban rolls back the state changes if the transfer fails.
-            asset.transfer(&this_contract, &stream.recipient, &settled_amount);
         }
 
         stream.cancelled = true;
@@ -268,6 +266,11 @@ impl TreasuryStreamsContract {
             }
         }
         Self::save_active_ids(&env, &remaining);
+
+        if settled_amount > 0 {
+            let asset = token::TokenClient::new(&env, &stream.asset);
+            asset.transfer(&env.current_contract_address(), &stream.recipient, &settled_amount);
+        }
 
         emit_stream_cancelled(&env, stream_id, stream.total_streamed, settled_amount);
     }
