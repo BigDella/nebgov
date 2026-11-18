@@ -80,7 +80,7 @@ export default function RecurringStreamsPage() {
             </label>
           ))}
           {error && <p role="alert" className="text-red-700">{error}</p>}
-          {createdId !== null && <p role="status" className="text-green-700">Created stream #{createdId.toString()}</p>}
+          {createdId !== null && <p role="status" className="text-green-700">Created stream #{createdId.toString()}. <Link href={`/treasury/recurring-streams/${createdId.toString()}`} className="underline">View stream</Link></p>}
           <button type="submit" disabled={busy} className="rounded bg-indigo-600 px-4 py-2 text-white disabled:opacity-50">
             {busy ? "Creating…" : "Create recurring stream"}
           </button>
