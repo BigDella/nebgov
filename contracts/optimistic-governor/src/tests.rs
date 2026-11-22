@@ -60,6 +60,7 @@ const CHALLENGE_WINDOW: u32 = 100;
 const OBJECTION_THRESHOLD_BPS: u32 = 300; // 3%
 const TOTAL_SUPPLY: i128 = 1_000_000;
 const BOND_AMOUNT: i128 = 1_000;
+const EXECUTION_WINDOW: u32 = 1_000;
 
 struct Fixture {
     env: Env,
@@ -96,6 +97,7 @@ fn setup(bond_amount: i128) -> Fixture {
         &OBJECTION_THRESHOLD_BPS,
         &bond_amount,
         &bond_token,
+        &EXECUTION_WINDOW,
     );
 
     let votes = MockVotesClient::new(&env, &votes_id);
@@ -275,22 +277,49 @@ fn cancel_rejected_once_a_proposal_has_already_passed() {
     c.cancel(&f.proposer, &id);
 }
 
+/// Push `id` over the objection threshold so it freezes in `Objected`.
+fn object_past_threshold(f: &Fixture, id: u64) {
+    let c = client(f);
+    let objector = Address::generate(&f.env);
+    MockVotesClient::new(&f.env, &f.votes_id).set_votes(&objector, &(TOTAL_SUPPLY * 5 / 100));
+    c.object(&objector, &id);
+    assert_eq!(c.get_proposal(&id).state, OptimisticProposalState::Objected);
+}
+
 #[test]
-fn cancel_refunds_bond_and_is_allowed_while_objected() {
+fn cancel_before_any_objection_refunds_bond() {
     let f = setup(BOND_AMOUNT);
     let c = client(&f);
     let tok = token::TokenClient::new(&f.env, &f.bond_token);
     let balance_before = tok.balance(&f.proposer);
     let id = propose(&f);
 
-    let objector = Address::generate(&f.env);
-    MockVotesClient::new(&f.env, &f.votes_id).set_votes(&objector, &(TOTAL_SUPPLY * 5 / 100));
-    c.object(&objector, &id);
-    assert_eq!(c.get_proposal(&id).state, OptimisticProposalState::Objected);
+    c.cancel(&f.proposer, &id);
+    assert_eq!(
+        c.get_proposal(&id).state,
+        OptimisticProposalState::Cancelled
+    );
+    assert_eq!(tok.balance(&f.proposer), balance_before);
+    assert_eq!(tok.balance(&f.client_id), 0);
+}
+
+#[test]
+fn cancel_is_allowed_while_objected_but_keeps_bond_locked() {
+    let f = setup(BOND_AMOUNT);
+    let c = client(&f);
+    let tok = token::TokenClient::new(&f.env, &f.bond_token);
+    let balance_before = tok.balance(&f.proposer);
+    let id = propose(&f);
+    object_past_threshold(&f, id);
 
     c.cancel(&f.proposer, &id);
-    assert_eq!(c.get_proposal(&id).state, OptimisticProposalState::Cancelled);
-    assert_eq!(tok.balance(&f.proposer), balance_before);
+    assert_eq!(
+        c.get_proposal(&id).state,
+        OptimisticProposalState::Cancelled
+    );
+    // Propose, get objected, cancel must not be free: the bond stays put.
+    assert_eq!(tok.balance(&f.proposer), balance_before - BOND_AMOUNT);
+    assert_eq!(tok.balance(&f.client_id), BOND_AMOUNT);
 }
 
 #[test]
@@ -332,6 +361,7 @@ fn initialize_rejects_reinitialization() {
         &OBJECTION_THRESHOLD_BPS,
         &0,
         &f.bond_token,
+        &EXECUTION_WINDOW,
     );
 }
 
@@ -357,7 +387,12 @@ fn propose_before_initialize_rejected() {
 fn update_config_by_admin_applies_to_future_proposals() {
     let f = setup(0);
     let c = client(&f);
-    c.update_config(&f.admin, &(CHALLENGE_WINDOW * 2), &(OBJECTION_THRESHOLD_BPS * 2));
+    c.update_config(
+        &f.admin,
+        &(CHALLENGE_WINDOW * 2),
+        &(OBJECTION_THRESHOLD_BPS * 2),
+        &EXECUTION_WINDOW,
+    );
 
     let id = propose(&f);
     let proposal = c.get_proposal(&id);
@@ -385,13 +420,48 @@ fn update_config_by_non_admin_rejected() {
     let f = setup(0);
     let c = client(&f);
     let attacker = Address::generate(&f.env);
-    c.update_config(&attacker, &CHALLENGE_WINDOW, &OBJECTION_THRESHOLD_BPS);
+    c.update_config(
+        &attacker,
+        &CHALLENGE_WINDOW,
+        &OBJECTION_THRESHOLD_BPS,
+        &EXECUTION_WINDOW,
+    );
+}
+
+#[test]
+fn bond_updates_do_not_change_existing_refund_token() {
+    let f = setup(BOND_AMOUNT);
+    let c = client(&f);
+    let id = propose(&f);
+    let replacement = f
+        .env
+        .register_stellar_asset_contract_v2(f.admin.clone())
+        .address();
+    c.update_bond_config(&f.admin, &(BOND_AMOUNT * 2), &replacement);
+    f.env
+        .ledger()
+        .with_mut(|l| l.sequence_number += CHALLENGE_WINDOW + 1);
+    c.finalize(&id);
+    assert_eq!(
+        token::TokenClient::new(&f.env, &f.bond_token).balance(&f.proposer),
+        BOND_AMOUNT * 10
+    );
+}
+
+#[test]
+fn admin_can_be_rotated() {
+    let f = setup(0);
+    let c = client(&f);
+    let next = Address::generate(&f.env);
+    c.set_admin(&f.admin, &next);
+    c.update_bond_config(&next, &1, &f.bond_token);
+    assert_eq!(c.get_config().proposer_bond_amount, 1);
 }
 
 // ── #1377: refund_bond ProposerBondToken typed-error path ───────────────────
 
 /// When a bond was locked, finalize() must successfully refund it, proving the
-/// ProposerBondToken read in refund_bond works correctly. The `NotInitialized`
+/// ProposerBondToken read in pay_out_bond works correctly. The `NotInitialized`
 /// error path is indirectly guarded by the require_initialized() gate that
 /// fires before any bond can ever be written.
 #[test]
@@ -410,12 +480,12 @@ fn refund_bond_returns_tokens_on_finalize() {
         .with_mut(|l| l.sequence_number += CHALLENGE_WINDOW + 1);
     c.finalize(&id);
 
-    // refund_bond() ran without panicking — bond is back with the proposer.
+    // pay_out_bond() ran without panicking — bond is back with the proposer.
     assert_eq!(tok.balance(&f.proposer), balance_before);
     assert_eq!(tok.balance(&f.client_id), 0);
 }
 
-/// A contract that was never initialized cannot reach refund_bond because
+/// A contract that was never initialized cannot reach pay_out_bond because
 /// propose() itself panics with NotInitialized first — the gate is upstream.
 #[test]
 fn refund_bond_not_reachable_before_initialization() {
@@ -437,4 +507,153 @@ fn refund_bond_not_reachable_before_initialization() {
         .unwrap_err()
         .unwrap();
     assert_eq!(err, OptimisticGovernorError::NotInitialized.into());
+}
+
+// ── #1539: objected bonds stay locked until governance settles them ─────────
+
+#[test]
+fn slash_bond_on_objected_proposal_pays_recipient() {
+    let f = setup(BOND_AMOUNT);
+    let c = client(&f);
+    let tok = token::TokenClient::new(&f.env, &f.bond_token);
+    let id = propose(&f);
+    object_past_threshold(&f, id);
+
+    let recipient = Address::generate(&f.env);
+    c.slash_bond(&f.admin, &id, &recipient);
+    assert_eq!(tok.balance(&recipient), BOND_AMOUNT);
+    assert_eq!(tok.balance(&f.client_id), 0);
+}
+
+#[test]
+fn slash_bond_after_cancel_while_objected_pays_recipient() {
+    let f = setup(BOND_AMOUNT);
+    let c = client(&f);
+    let tok = token::TokenClient::new(&f.env, &f.bond_token);
+    let id = propose(&f);
+    object_past_threshold(&f, id);
+    c.cancel(&f.proposer, &id);
+
+    let recipient = Address::generate(&f.env);
+    c.slash_bond(&f.admin, &id, &recipient);
+    assert_eq!(tok.balance(&recipient), BOND_AMOUNT);
+    assert_eq!(tok.balance(&f.client_id), 0);
+}
+
+#[test]
+fn release_bond_on_objected_proposal_returns_it_to_proposer() {
+    let f = setup(BOND_AMOUNT);
+    let c = client(&f);
+    let tok = token::TokenClient::new(&f.env, &f.bond_token);
+    let balance_before = tok.balance(&f.proposer);
+    let id = propose(&f);
+    object_past_threshold(&f, id);
+
+    c.release_bond(&f.admin, &id);
+    assert_eq!(tok.balance(&f.proposer), balance_before);
+    assert_eq!(tok.balance(&f.client_id), 0);
+}
+
+#[test]
+fn settled_bond_cannot_be_settled_again() {
+    let f = setup(BOND_AMOUNT);
+    let c = client(&f);
+    let id = propose(&f);
+    object_past_threshold(&f, id);
+    let recipient = Address::generate(&f.env);
+    c.slash_bond(&f.admin, &id, &recipient);
+
+    assert_eq!(
+        c.try_slash_bond(&f.admin, &id, &recipient)
+            .unwrap_err()
+            .unwrap(),
+        OptimisticGovernorError::BondNotFound.into(),
+    );
+    assert_eq!(
+        c.try_release_bond(&f.admin, &id).unwrap_err().unwrap(),
+        OptimisticGovernorError::BondNotFound.into(),
+    );
+}
+
+#[test]
+fn bond_cannot_be_slashed_before_an_objection() {
+    let f = setup(BOND_AMOUNT);
+    let c = client(&f);
+    let id = propose(&f);
+    let recipient = Address::generate(&f.env);
+
+    assert_eq!(
+        c.try_slash_bond(&f.admin, &id, &recipient)
+            .unwrap_err()
+            .unwrap(),
+        OptimisticGovernorError::BondNotSettleable.into(),
+    );
+    assert_eq!(
+        c.try_release_bond(&f.admin, &id).unwrap_err().unwrap(),
+        OptimisticGovernorError::BondNotSettleable.into(),
+    );
+}
+
+#[test]
+fn bond_of_a_passed_proposal_is_already_refunded_and_cannot_be_slashed() {
+    let f = setup(BOND_AMOUNT);
+    let c = client(&f);
+    let id = propose(&f);
+    f.env
+        .ledger()
+        .with_mut(|l| l.sequence_number += CHALLENGE_WINDOW + 1);
+    c.finalize(&id);
+
+    let recipient = Address::generate(&f.env);
+    assert_eq!(
+        c.try_slash_bond(&f.admin, &id, &recipient)
+            .unwrap_err()
+            .unwrap(),
+        OptimisticGovernorError::BondNotFound.into(),
+    );
+}
+
+#[test]
+fn slash_and_release_bond_require_admin() {
+    let f = setup(BOND_AMOUNT);
+    let c = client(&f);
+    let id = propose(&f);
+    object_past_threshold(&f, id);
+    let attacker = Address::generate(&f.env);
+
+    assert_eq!(
+        c.try_slash_bond(&attacker, &id, &attacker)
+            .unwrap_err()
+            .unwrap(),
+        OptimisticGovernorError::Unauthorized.into(),
+    );
+    assert_eq!(
+        c.try_release_bond(&attacker, &id).unwrap_err().unwrap(),
+        OptimisticGovernorError::Unauthorized.into(),
+    );
+    assert_eq!(
+        token::TokenClient::new(&f.env, &f.bond_token).balance(&f.client_id),
+        BOND_AMOUNT
+    );
+}
+
+#[test]
+fn slash_bond_pays_out_in_the_token_the_bond_was_locked_in() {
+    let f = setup(BOND_AMOUNT);
+    let c = client(&f);
+    let id = propose(&f);
+    object_past_threshold(&f, id);
+
+    let replacement = f
+        .env
+        .register_stellar_asset_contract_v2(f.admin.clone())
+        .address();
+    c.update_bond_config(&f.admin, &BOND_AMOUNT, &replacement);
+
+    let recipient = Address::generate(&f.env);
+    c.slash_bond(&f.admin, &id, &recipient);
+    assert_eq!(
+        token::TokenClient::new(&f.env, &f.bond_token).balance(&recipient),
+        BOND_AMOUNT
+    );
 }
