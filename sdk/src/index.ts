@@ -24,6 +24,7 @@ export type { DelegationSigConfig, DelegationTxResult } from "./delegation-sig";
 export { FactoryClient } from "./factory";
 export type { GovernorEntry, DeploySettings } from "./factory";
 export { TimelockClient } from "./timelock";
+export type { TimelockOperation, TimelockBatchOperation } from "./timelock";
 export { TreasuryClient } from "./treasury";
 export { LiquidityClient } from "./liquidity";
 export { AnalyticsClient } from "./analytics";
@@ -78,6 +79,9 @@ export {
   parseProposalBondsError,
   parseTreasuryStrategiesError,
   parseVotingRewardsError,
+  GuardianCouncilError,
+  GuardianCouncilErrorCode,
+  parseGuardianCouncilError,
   extractContractErrorCode,
 } from "./errors";
 export type { SorobanRpcError } from "./errors";
@@ -235,8 +239,93 @@ export { OptimisticGovernorClient } from "./optimisticGovernor";
 export { computeQuadraticWeight, hexToBytes32, encodeCalldata, decodeCalldata } from "./utils";
 export { streamEvents } from "./streamEvents";
 export type { IndexerEvent, WsEventType, StreamEventsOptions, UnsubscribeFn } from "./streamEvents";
+export {
+  parseLiquidityAddedEvent, parseLiquidityRemovedEvent, parseSwapEvent, parsePoolFeeUpdatedEvent,
+  subscribeToLiquidityAdded, subscribeToLiquidityRemoved, subscribeToSwap, subscribeToPoolFeeUpdated,
+  parseEpochSweptEvent, parseAdminSetEvent, parseEpochDurationUpdatedEvent, parseEscrowConfigUpdatedEvent,
+  subscribeToEpochSwept, subscribeToAdminSet, subscribeToEpochDurationUpdated, subscribeToEscrowConfigUpdated,
+} from "./events";
+export type { LiquidityAddedEventData, LiquidityRemovedEventData, SwapEventData, PoolFeeUpdatedEventData, EpochSweptEventData, AdminSetEventData, EpochDurationUpdatedEventData, EscrowConfigUpdatedEventData } from "./events";
 export { AmendmentsClient } from "./amendments";
 export type { ProposalAmendment, AmendmentInput, JsonMergePatch } from "./amendments";
 
 export { GuardianCouncilClient, encodeGuardianAction, decodeGuardianAction } from "./guardianCouncil";
 export type { GuardianCouncilConfig, GuardianAction, PendingAction } from "./guardianCouncil";
+
+// Namespaced standalone contract event helpers.
+export {
+  parseOptimisticProposalCreatedEvent,
+  subscribeToOptimisticProposalCreated,
+  parseOptimisticObjectionCastEvent,
+  subscribeToOptimisticObjectionCast,
+  parseOptimisticProposalObjectedEvent,
+  subscribeToOptimisticProposalObjected,
+  parseOptimisticProposalPassedEvent,
+  subscribeToOptimisticProposalPassed,
+  parseOptimisticProposalExecutedEvent,
+  subscribeToOptimisticProposalExecuted,
+  parseOptimisticProposalCancelledEvent,
+  subscribeToOptimisticProposalCancelled,
+  parseOptimisticProposalExpiredEvent,
+  subscribeToOptimisticProposalExpired,
+  parseOptimisticConfigUpdatedEvent,
+  subscribeToOptimisticConfigUpdated,
+  parseOptimisticBondConfigUpdatedEvent,
+  subscribeToOptimisticBondConfigUpdated,
+  parseOptimisticAdminUpdatedEvent,
+  subscribeToOptimisticAdminUpdated,
+  parseStrategyRegisteredEvent,
+  subscribeToStrategyRegistered,
+  parseStrategyDeactivatedEvent,
+  subscribeToStrategyDeactivated,
+  parseStrategyDepositedEvent,
+  subscribeToStrategyDeposited,
+  parseStrategyWithdrawalRequestedEvent,
+  subscribeToStrategyWithdrawalRequested,
+  parseStrategyWithdrawalClaimedEvent,
+  subscribeToStrategyWithdrawalClaimed,
+  parseBondLockedEvent,
+  subscribeToBondLocked,
+  parseBondRefundedEvent,
+  subscribeToBondRefunded,
+  parseBondSlashedEvent,
+  subscribeToBondSlashed,
+  parseBondAmountUpdatedEvent,
+  subscribeToBondAmountUpdated,
+  parseRecurringStreamCreatedEvent,
+  subscribeToRecurringStreamCreated,
+  parseRecurringStreamExecutedEvent,
+  subscribeToRecurringStreamExecuted,
+  parseRecurringStreamPausedEvent,
+  subscribeToRecurringStreamPaused,
+  parseRecurringStreamResumedEvent,
+  subscribeToRecurringStreamResumed,
+  parseRecurringStreamCancelledEvent,
+  subscribeToRecurringStreamCancelled,
+} from "./events";
+export type {
+  OptimisticProposalCreatedEventData,
+  OptimisticObjectionCastEventData,
+  OptimisticProposalObjectedEventData,
+  OptimisticProposalPassedEventData,
+  OptimisticProposalExecutedEventData,
+  OptimisticProposalCancelledEventData,
+  OptimisticProposalExpiredEventData,
+  OptimisticConfigUpdatedEventData,
+  OptimisticBondConfigUpdatedEventData,
+  OptimisticAdminUpdatedEventData,
+  StrategyRegisteredEventData,
+  StrategyDeactivatedEventData,
+  StrategyDepositedEventData,
+  StrategyWithdrawalRequestedEventData,
+  StrategyWithdrawalClaimedEventData,
+  BondLockedEventData,
+  BondRefundedEventData,
+  BondSlashedEventData,
+  BondAmountUpdatedEventData,
+  RecurringStreamCreatedEventData,
+  RecurringStreamExecutedEventData,
+  RecurringStreamPausedEventData,
+  RecurringStreamResumedEventData,
+  RecurringStreamCancelledEventData,
+} from "./events";
