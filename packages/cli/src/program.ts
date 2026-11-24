@@ -1,4 +1,7 @@
 import { registerGuardianCouncil } from "./guardianCouncil.js";
+import { registerTimelock } from "./timelock.js";
+import { registerRecurringStreams } from "./recurringStreams.js";
+import { registerVoteCommitReveal } from "./commitReveal.js";
 import { Command } from "commander";
 import {
   GovernorClient,
@@ -199,7 +202,7 @@ export function createProgram(): Command {
     return { global, cfg };
   };
 
-  program
+  const proposals = program
     .command("proposals")
     .description("Proposal commands")
     .addCommand(
@@ -289,8 +292,9 @@ export function createProgram(): Command {
           output({ proposalId }, global);
         }),
     );
+  registerProposalAmendments(proposals, context);
 
-  program
+  const vote = program
     .command("vote")
     .description("Vote commands")
     .addCommand(
@@ -605,6 +609,9 @@ export function createProgram(): Command {
     );
 
   registerGuardianCouncil(program, context);
+  registerTimelock(program, context);
+  registerRecurringStreams(program, context);
+  registerVoteCommitReveal(vote, context);
 
   program
     .command("proposal-bonds")
@@ -629,6 +636,59 @@ export function createProgram(): Command {
             moduleConfig(cfg, { proposalBondsAddress: required(cfg, "proposalBondsAddress") }),
           );
           output(await client.getSettings(), global);
+        }),
+    )
+    .addCommand(
+      new Command("update-settings")
+        .description("Admin: replace the bond token, governor and refund windows")
+        .requiredOption("--bond-token <address>", "token new bonds are locked in")
+        .requiredOption("--governor <address>", "governor queried by refunds and allowed to slash")
+        .requiredOption("--refund-grace-ledgers <ledgers>", "ledgers after voting ends before a refund")
+        .requiredOption("--max-lock-ledgers <ledgers>", "ledgers after locking when a refund is always allowed")
+        .requiredOption("--keypair <file>", "admin keypair file path")
+        .action(async (options) => {
+          const { global, cfg } = await context();
+          const settings = {
+            bondToken: parseContractAddress(options.bondToken, "bond-token"),
+            governor: parseContractAddress(options.governor, "governor"),
+            refundGraceLedgers: parseU32(options.refundGraceLedgers, "refund-grace-ledgers"),
+            maxLockLedgers: parseU32(options.maxLockLedgers, "max-lock-ledgers"),
+          };
+          if (settings.maxLockLedgers <= settings.refundGraceLedgers) {
+            throw new Error("max-lock-ledgers must be greater than refund-grace-ledgers");
+          }
+          const client = new ProposalBondsClient(
+            moduleConfig(cfg, { proposalBondsAddress: required(cfg, "proposalBondsAddress") }),
+          );
+          if (global.dryRun) {
+            output({ action: "proposal-bonds.update-settings", ...settings }, global);
+            return;
+          }
+
+          const signer = await loadKeypair(options.keypair);
+          const hash = await client.updateSettings(signer, settings);
+          output({ ok: true, ...settings, admin: signer.publicKey(), hash }, global);
+        }),
+    )
+    .addCommand(
+      new Command("set-admin")
+        .description("Admin: hand the admin role to another address")
+        .argument("<new-admin>", "address that becomes the admin")
+        .requiredOption("--keypair <file>", "current admin keypair file path")
+        .action(async (newAdmin: string, options) => {
+          const { global, cfg } = await context();
+          const next = parseAddress(newAdmin, "new-admin");
+          const client = new ProposalBondsClient(
+            moduleConfig(cfg, { proposalBondsAddress: required(cfg, "proposalBondsAddress") }),
+          );
+          if (global.dryRun) {
+            output({ action: "proposal-bonds.set-admin", newAdmin: next }, global);
+            return;
+          }
+
+          const signer = await loadKeypair(options.keypair);
+          const hash = await client.setAdmin(signer, next);
+          output({ ok: true, admin: signer.publicKey(), newAdmin: next, hash }, global);
         }),
     );
 

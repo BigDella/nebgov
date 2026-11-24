@@ -261,6 +261,13 @@ export enum VotesErrorCode {
   SplitDuplicateDelegatee = 19,
   SplitZeroWeight = 20,
   SplitWeightsMustSum10000 = 21,
+  SplitTargetsBelowMin = 22,
+  SplitEmpty = 23,
+  WeightBpsOverflow = 24,
+  TokenNotSet = 25,
+  FutureLedger = 26,
+  AlreadyInitialized = 27,
+  InvalidTimeWeightScale = 28,
 
   // SDK-level codes
   SimulationFailed = 100,
@@ -295,6 +302,15 @@ const VOTES_MESSAGES: Record<VotesErrorCode, string> = {
     "Split delegation entry must have a non-zero weight",
   [VotesErrorCode.SplitWeightsMustSum10000]:
     "Split delegation weights must sum to exactly 10000 (100%)",
+  [VotesErrorCode.SplitTargetsBelowMin]:
+    "Split delegation contains a target below the minimum weight",
+  [VotesErrorCode.SplitEmpty]: "Split delegation must contain at least one target",
+  [VotesErrorCode.WeightBpsOverflow]: "Split delegation weight arithmetic overflowed",
+  [VotesErrorCode.TokenNotSet]: "The voting token is not configured",
+  [VotesErrorCode.FutureLedger]: "Snapshot ledger cannot be in the future",
+  [VotesErrorCode.AlreadyInitialized]: "TokenVotes contract is already initialized",
+  [VotesErrorCode.InvalidTimeWeightScale]:
+    "Time-weighting scale must be greater than zero",
 
   [VotesErrorCode.SimulationFailed]: "Simulation failed",
   [VotesErrorCode.TransactionFailed]: "Transaction failed",
@@ -834,6 +850,8 @@ export enum ProposalBondsErrorCode {
   ProposalNotTerminal = 7,
   RefundGraceNotElapsed = 8,
   NotAuthorized = 9,
+  InvalidBondAmount = 10,
+  InvalidLockWindow = 11,
 
   // SDK-level codes
   SimulationFailed = 100,
@@ -856,6 +874,8 @@ const PROPOSAL_BONDS_MESSAGES: Record<ProposalBondsErrorCode, string> = {
   [ProposalBondsErrorCode.RefundGraceNotElapsed]:
     "The post-terminal refund grace window has not elapsed yet",
   [ProposalBondsErrorCode.NotAuthorized]: "Caller is not authorized to perform this action",
+  [ProposalBondsErrorCode.InvalidBondAmount]: "Bond amount must be positive",
+  [ProposalBondsErrorCode.InvalidLockWindow]: "Lock window must exceed grace period and be shorter than bond storage lifetime",
   [ProposalBondsErrorCode.SimulationFailed]: "Simulation failed",
   [ProposalBondsErrorCode.TransactionFailed]: "Transaction failed",
   [ProposalBondsErrorCode.TransactionTimeout]: "Transaction timed out",
@@ -1140,6 +1160,8 @@ export enum OptimisticGovernorErrorCode {
   Unauthorized = 14,
   ArithmeticOverflow = 15,
   ProposalNotCancellable = 16,
+  BondNotFound = 18,
+  BondNotSettleable = 19,
 
   // SDK-level codes
   SimulationFailed = 100,
@@ -1164,6 +1186,9 @@ const OPTIMISTIC_GOVERNOR_MESSAGES: Record<OptimisticGovernorErrorCode, string> 
   [OptimisticGovernorErrorCode.Unauthorized]: "Caller is not authorized to perform this action",
   [OptimisticGovernorErrorCode.ArithmeticOverflow]: "Arithmetic overflow in objection calculation",
   [OptimisticGovernorErrorCode.ProposalNotCancellable]: "Proposal cannot be cancelled in its current state",
+  [OptimisticGovernorErrorCode.BondNotFound]: "No proposer bond is held for this proposal",
+  [OptimisticGovernorErrorCode.BondNotSettleable]:
+    "The bond can only be released or slashed after the proposal was objected",
   [OptimisticGovernorErrorCode.SimulationFailed]: "Simulation failed",
   [OptimisticGovernorErrorCode.TransactionFailed]: "Transaction failed",
   [OptimisticGovernorErrorCode.TransactionTimeout]: "Transaction timed out",
@@ -1309,3 +1334,10 @@ export function parseVotingRewardsError(
     cause,
   );
 }
+
+export enum GuardianCouncilErrorCode { AlreadyInitialized=1, NotInitialized=2, NotAMember=3, ActionNotFound=4, AlreadyExecuted=5, ThresholdNotMet=6, ActionExpired=7, NotApproved=8, InvalidThreshold=9, InvalidMembers=10, DuplicateMember=11, MemberNotFound=12, ActionCancelled=13, SimulationFailed=100, TransactionFailed=101, TransactionTimeout=102 }
+const GUARDIAN_COUNCIL_MESSAGES: Record<GuardianCouncilErrorCode,string> = {
+  [GuardianCouncilErrorCode.AlreadyInitialized]: "Contract is already initialized", [GuardianCouncilErrorCode.NotInitialized]: "Contract has not been initialized", [GuardianCouncilErrorCode.NotAMember]: "Caller is not a council member", [GuardianCouncilErrorCode.ActionNotFound]: "Guardian action not found", [GuardianCouncilErrorCode.AlreadyExecuted]: "Action has already been executed", [GuardianCouncilErrorCode.ThresholdNotMet]: "Approval threshold has not been met", [GuardianCouncilErrorCode.ActionExpired]: "Guardian action has expired", [GuardianCouncilErrorCode.NotApproved]: "Member approval was not found", [GuardianCouncilErrorCode.InvalidThreshold]: "Invalid council threshold", [GuardianCouncilErrorCode.InvalidMembers]: "Invalid council members", [GuardianCouncilErrorCode.DuplicateMember]: "Council member is duplicated", [GuardianCouncilErrorCode.MemberNotFound]: "Council member not found", [GuardianCouncilErrorCode.ActionCancelled]: "Action has been cancelled", [GuardianCouncilErrorCode.SimulationFailed]: "Simulation failed", [GuardianCouncilErrorCode.TransactionFailed]: "Transaction failed", [GuardianCouncilErrorCode.TransactionTimeout]: "Transaction timed out",
+};
+export class GuardianCouncilError extends Error { readonly name="GuardianCouncilError"; constructor(public readonly code:GuardianCouncilErrorCode,message:string,public readonly cause?:unknown){super(message);Object.setPrototypeOf(this,GuardianCouncilError.prototype);} }
+export function parseGuardianCouncilError(raw: SorobanRpcError|string|null|undefined,cause?:unknown):GuardianCouncilError { const n=extractContractErrorCode(raw); if(n!==null){const code=n as GuardianCouncilErrorCode; return new GuardianCouncilError(code,GUARDIAN_COUNCIL_MESSAGES[code]??`Guardian-council contract error #${n}`,cause);} const code=hasErrorStatus(raw)?GuardianCouncilErrorCode.TransactionFailed:GuardianCouncilErrorCode.SimulationFailed; return new GuardianCouncilError(code,`${GUARDIAN_COUNCIL_MESSAGES[code]}: ${errorText(raw)||"unknown"}`,cause); }
