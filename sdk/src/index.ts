@@ -24,6 +24,7 @@ export type { DelegationSigConfig, DelegationTxResult } from "./delegation-sig";
 export { FactoryClient } from "./factory";
 export type { GovernorEntry, DeploySettings } from "./factory";
 export { TimelockClient } from "./timelock";
+export type { TimelockOperation, TimelockBatchOperation } from "./timelock";
 export { TreasuryClient } from "./treasury";
 export { LiquidityClient } from "./liquidity";
 export { AnalyticsClient } from "./analytics";
@@ -78,6 +79,9 @@ export {
   parseProposalBondsError,
   parseTreasuryStrategiesError,
   parseVotingRewardsError,
+  GuardianCouncilError,
+  GuardianCouncilErrorCode,
+  parseGuardianCouncilError,
   extractContractErrorCode,
 } from "./errors";
 export type { SorobanRpcError } from "./errors";
@@ -235,6 +239,13 @@ export { OptimisticGovernorClient } from "./optimisticGovernor";
 export { computeQuadraticWeight, hexToBytes32, encodeCalldata, decodeCalldata } from "./utils";
 export { streamEvents } from "./streamEvents";
 export type { IndexerEvent, WsEventType, StreamEventsOptions, UnsubscribeFn } from "./streamEvents";
+export {
+  parseLiquidityAddedEvent, parseLiquidityRemovedEvent, parseSwapEvent, parsePoolFeeUpdatedEvent,
+  subscribeToLiquidityAdded, subscribeToLiquidityRemoved, subscribeToSwap, subscribeToPoolFeeUpdated,
+  parseEpochSweptEvent, parseAdminSetEvent, parseEpochDurationUpdatedEvent, parseEscrowConfigUpdatedEvent,
+  subscribeToEpochSwept, subscribeToAdminSet, subscribeToEpochDurationUpdated, subscribeToEscrowConfigUpdated,
+} from "./events";
+export type { LiquidityAddedEventData, LiquidityRemovedEventData, SwapEventData, PoolFeeUpdatedEventData, EpochSweptEventData, AdminSetEventData, EpochDurationUpdatedEventData, EscrowConfigUpdatedEventData } from "./events";
 export { AmendmentsClient } from "./amendments";
 export type { ProposalAmendment, AmendmentInput, JsonMergePatch } from "./amendments";
 
