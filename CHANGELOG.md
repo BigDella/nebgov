@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Documentation: commit-reveal voting, time-weighted voting and checkpoint pruning, proposal amendments, and the notification engine, with updated README, architecture, and parameter-guide links (#1627, #1628, #1629, #1630).
 - Treasury Streams: `contracts/treasury-streams` for recurring treasury payments, created by the governor and paid out permissionlessly per whole interval, with pause, resume and cancel. Includes the SDK `TreasuryStreamsClient`, a backend executor job gated on `TREASURY_STREAMS_CONTRACT_ID`, and the `treasury_stream_failures` table (migration 014).
 - Simulation: `treasury_strategies` scenario covering deposit, withdrawal cooldown, early and double claims, and over-allocation (new `tools/sim` steps for treasury strategies).
 - Architecture docs: sections for the proposal-bonds, optimistic-governor, conviction-voting, treasury-strategies and signal-anchor contracts, and their events.
@@ -38,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SDK: typed error parsing for all contracts, comprehensive test coverage for clients and lifecycle flows (#1173, #1161, #1156, #1155, #1153)
 - Simulation: optimistic governance scenario (propose/object/finalize/execute) and conviction voting test coverage (#1160, #1153)
 - Testing: comprehensive test suites for vote-escrow, voting-rewards, treasury-strategies, proposal bonds, and SDK clients with event coverage (#1156, #1155, #1151, #1150)
+- Proposal Bonds: admin-only `update_settings` (bond token, governor, refund grace, max lock) and `set_admin`, with `SettingsUpdated` / `AdminUpdated` events, `ProposalBondsClient.updateSettings` / `setAdmin`, and `nebgov proposal-bonds update-settings` / `set-admin`. Each bond keeps the token it was locked in (#1537)
+- Optimistic Governor: admin (governance) `release_bond` / `slash_bond` for objected proposals, with `BondReleased` / `BondSlashed` events (#1539)
+- Treasury Streams: `Stream.completed` and the `StrmCompleted` event; the indexer subscribes to the contract through `TREASURY_STREAMS_ADDRESS` (#1542)
 
 ### Changed
 
@@ -53,6 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Optimistic Governor: cancelling an objected proposal no longer refunds its bond, so the anti-spam bond is actually at risk (#1539)
+- Treasury Streams: a stream that pays its last whole interval is removed from `get_active_streams`, and the backend executor skips completed streams (#1542)
+- Voting Rewards: `publish_epoch_root` finalizes the epoch even when `total_reward_amount` is 0, so an empty epoch's root can't be overwritten (#1545)
 - SDK build: restore `ConvictionVotingConfig.indexerUrl` and export `VoteEscrowLock` / `VoteEscrowStats` from their defining module.
 - `fuzz/timelock.rs` no longer shadows `Vec` with the Soroban type, so it compiles.
 

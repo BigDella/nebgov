@@ -1,7 +1,9 @@
 #![cfg(test)]
 
 use crate::error::GuardianCouncilError;
-use crate::{GuardianAction, GuardianCouncilContract, GuardianCouncilContractClient, MemberRotation};
+use crate::{
+    GuardianAction, GuardianCouncilContract, GuardianCouncilContractClient, MemberRotation,
+};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Symbol, Vec};
 
@@ -27,7 +29,9 @@ impl MockGovernor {
     }
     pub fn cancel_queued(env: Env, caller: Address, proposal_id: u64) {
         caller.require_auth();
-        env.storage().instance().set(&LAST_CANCELLED_QUEUED, &proposal_id);
+        env.storage()
+            .instance()
+            .set(&LAST_CANCELLED_QUEUED, &proposal_id);
     }
     pub fn is_paused(env: Env) -> bool {
         env.storage().instance().get(&PAUSED).unwrap_or(false)
@@ -53,21 +57,48 @@ fn setup(threshold: u32, ttl: u32) -> Setup {
     env.mock_all_auths();
 
     let governor_id = env.register(MockGovernor, ());
-    let council_id = env.register(GuardianCouncilContract, ());
-    let council = GuardianCouncilContractClient::new(&env, &council_id);
-
     let m = [
         Address::generate(&env),
         Address::generate(&env),
         Address::generate(&env),
     ];
+    let council_id = env.register(GuardianCouncilContract, (m[0].clone(),));
+    let council = GuardianCouncilContractClient::new(&env, &council_id);
     let mut members = Vec::new(&env);
     for a in &m {
         members.push_back(a.clone());
     }
-    council.initialize(&members, &threshold, &governor_id, &ttl);
+    council.initialize(&m[0], &members, &threshold, &governor_id, &ttl);
 
-    Setup { env, council, governor_id, m }
+    Setup {
+        env,
+        council,
+        governor_id,
+        m,
+    }
+}
+
+#[test]
+fn initialize_requires_deployer_authorization() {
+    let env = Env::default();
+    let governor = env.register(MockGovernor, ());
+    let deployer = Address::generate(&env);
+    let council_id = env.register(GuardianCouncilContract, (deployer.clone(),));
+    let council = GuardianCouncilContractClient::new(&env, &council_id);
+    let member = Address::generate(&env);
+    let mut members = Vec::new(&env);
+    members.push_back(member);
+
+    assert!(council
+        .try_initialize(&deployer, &members, &1u32, &governor, &0u32)
+        .is_err());
+
+    env.mock_all_auths();
+    let other = Address::generate(&env);
+    assert!(council
+        .try_initialize(&other, &members, &1u32, &governor, &0u32)
+        .is_err());
+    council.initialize(&deployer, &members, &1u32, &governor, &0u32);
 }
 
 fn mock_governor(env: &Env, id: &Address) -> MockGovernorClient<'static> {
@@ -88,6 +119,76 @@ fn pause_executes_only_after_threshold_and_lands_on_governor() {
 
     assert!(mock_governor(&s.env, &s.governor_id).is_paused());
     assert!(s.council.get_action(&id).executed);
+}
+
+#[test]
+fn action_expiry_is_snapshotted_when_proposed() {
+    let s = setup(2, 10);
+    let id = s.council.propose_action(&s.m[0], &GuardianAction::Pause);
+    s.council.approve_action(&s.m[1], &id);
+    let change = s
+        .council
+        .propose_action(&s.m[0], &GuardianAction::SetActionTtl(0));
+    s.council.approve_action(&s.m[1], &change);
+    s.council.execute_action(&change);
+    s.env.ledger().with_mut(|l| l.sequence_number += 11);
+    let err = s.council.try_execute_action(&id).unwrap_err().unwrap();
+    assert_eq!(err, GuardianCouncilError::ActionExpired.into());
+}
+
+#[test]
+fn shortening_ttl_does_not_expire_an_existing_action() {
+    let s = setup(2, 100);
+    let id = s.council.propose_action(&s.m[0], &GuardianAction::Pause);
+    s.council.approve_action(&s.m[1], &id);
+    let change = s
+        .council
+        .propose_action(&s.m[0], &GuardianAction::SetActionTtl(1));
+    s.council.approve_action(&s.m[1], &change);
+    s.council.execute_action(&change);
+    s.env.ledger().with_mut(|l| l.sequence_number += 2);
+    s.council.execute_action(&id);
+    assert!(s.council.get_action(&id).executed);
+}
+
+#[test]
+fn proposer_can_cancel_and_cancelled_action_rejects_approval_and_execution() {
+    let s = setup(2, 0);
+    let id = s.council.propose_action(&s.m[0], &GuardianAction::Pause);
+    s.council.cancel_action(&s.m[0], &id);
+    assert!(s.council.get_action(&id).cancelled);
+    assert_eq!(
+        s.council
+            .try_approve_action(&s.m[1], &id)
+            .unwrap_err()
+            .unwrap(),
+        GuardianCouncilError::ActionCancelled.into()
+    );
+    assert_eq!(
+        s.council.try_execute_action(&id).unwrap_err().unwrap(),
+        GuardianCouncilError::ActionCancelled.into()
+    );
+}
+
+#[test]
+fn threshold_of_members_can_cancel() {
+    let s = setup(2, 0);
+    let id = s.council.propose_action(&s.m[0], &GuardianAction::Pause);
+    s.council.cancel_action(&s.m[1], &id);
+    assert!(!s.council.get_action(&id).cancelled);
+    s.council.cancel_action(&s.m[2], &id);
+    assert!(s.council.get_action(&id).cancelled);
+}
+
+#[test]
+fn action_count_and_page_are_exposed() {
+    let s = setup(2, 0);
+    s.council.propose_action(&s.m[0], &GuardianAction::Pause);
+    s.council.propose_action(&s.m[0], &GuardianAction::Unpause);
+    assert_eq!(s.council.get_action_count(), 2);
+    let page = s.council.get_actions(&1, &10);
+    assert_eq!(page.len(), 1);
+    assert_eq!(page.get_unchecked(0).id, 1);
 }
 
 #[test]
@@ -141,7 +242,9 @@ fn revoke_drops_below_threshold_and_blocks_until_reapproved() {
 #[test]
 fn execution_after_ttl_elapsed_panics() {
     let s = setup(2, 100);
-    let id = s.council.propose_action(&s.m[0], &GuardianAction::CancelActive(7));
+    let id = s
+        .council
+        .propose_action(&s.m[0], &GuardianAction::CancelActive(7));
     s.council.approve_action(&s.m[1], &id);
 
     s.env.ledger().with_mut(|l| l.sequence_number += 101);
@@ -179,7 +282,9 @@ fn rotate_member_updates_membership_after_execution() {
 #[test]
 fn cancel_active_forwards_proposal_id_to_governor() {
     let s = setup(1, 0);
-    let id = s.council.propose_action(&s.m[0], &GuardianAction::CancelActive(42));
+    let id = s
+        .council
+        .propose_action(&s.m[0], &GuardianAction::CancelActive(42));
     s.council.execute_action(&id);
     assert_eq!(mock_governor(&s.env, &s.governor_id).last_cancelled(), 42);
 }
@@ -187,7 +292,9 @@ fn cancel_active_forwards_proposal_id_to_governor() {
 #[test]
 fn set_threshold_goes_through_a_council_action() {
     let s = setup(2, 0);
-    let id = s.council.propose_action(&s.m[0], &GuardianAction::SetThreshold(3));
+    let id = s
+        .council
+        .propose_action(&s.m[0], &GuardianAction::SetThreshold(3));
     s.council.approve_action(&s.m[1], &id);
     s.council.execute_action(&id);
     assert_eq!(s.council.get_threshold(), 3);
@@ -207,15 +314,14 @@ fn initialize_rejects_bad_threshold_and_duplicate_members() {
     let env = Env::default();
     env.mock_all_auths();
     let governor_id = env.register(MockGovernor, ());
-    let council_id = env.register(GuardianCouncilContract, ());
-    let council = GuardianCouncilContractClient::new(&env, &council_id);
-
     let a = Address::generate(&env);
+    let council_id = env.register(GuardianCouncilContract, (a.clone(),));
+    let council = GuardianCouncilContractClient::new(&env, &council_id);
     let mut dupes = Vec::new(&env);
     dupes.push_back(a.clone());
     dupes.push_back(a.clone());
     let e = council
-        .try_initialize(&dupes, &1u32, &governor_id, &0u32)
+        .try_initialize(&a, &dupes, &1u32, &governor_id, &0u32)
         .unwrap_err()
         .unwrap();
     assert_eq!(e, GuardianCouncilError::DuplicateMember.into());
@@ -223,7 +329,7 @@ fn initialize_rejects_bad_threshold_and_duplicate_members() {
     let mut one = Vec::new(&env);
     one.push_back(a.clone());
     let e2 = council
-        .try_initialize(&one, &5u32, &governor_id, &0u32)
+        .try_initialize(&a, &one, &5u32, &governor_id, &0u32)
         .unwrap_err()
         .unwrap();
     assert_eq!(e2, GuardianCouncilError::InvalidThreshold.into());
@@ -240,7 +346,9 @@ fn set_action_ttl_updates_via_council_action() {
     // Initial TTL is 0 (no expiry).
     assert_eq!(s.council.get_action_ttl(), 0);
 
-    let id = s.council.propose_action(&s.m[0], &GuardianAction::SetActionTtl(500));
+    let id = s
+        .council
+        .propose_action(&s.m[0], &GuardianAction::SetActionTtl(500));
     // 1 of 2 — threshold not yet met.
     let err = s.council.try_execute_action(&id).unwrap_err().unwrap();
     assert_eq!(err, GuardianCouncilError::ThresholdNotMet.into());
@@ -258,7 +366,9 @@ fn set_action_ttl_to_zero_disables_expiry() {
     let s = setup(1, 100);
     assert_eq!(s.council.get_action_ttl(), 100);
 
-    let id = s.council.propose_action(&s.m[0], &GuardianAction::SetActionTtl(0));
+    let id = s
+        .council
+        .propose_action(&s.m[0], &GuardianAction::SetActionTtl(0));
     s.council.execute_action(&id);
 
     // TTL is now 0 — no expiry.
@@ -298,7 +408,9 @@ fn action_expires_after_ttl_ledgers_elapse() {
 fn set_action_ttl_action_itself_can_expire() {
     let s = setup(2, 100);
 
-    let id = s.council.propose_action(&s.m[0], &GuardianAction::SetActionTtl(999));
+    let id = s
+        .council
+        .propose_action(&s.m[0], &GuardianAction::SetActionTtl(999));
     s.council.approve_action(&s.m[1], &id);
 
     // Advance past the current TTL of 100.
@@ -306,4 +418,19 @@ fn set_action_ttl_action_itself_can_expire() {
 
     let err = s.council.try_execute_action(&id).unwrap_err().unwrap();
     assert_eq!(err, GuardianCouncilError::ActionExpired.into());
+}
+
+#[test]
+fn test_instance_ttl_extended() {
+    let s = setup(2, 50);
+
+    // Advance ledger past default instance TTL
+    s.env.ledger().with_mut(|l| {
+        l.sequence_number += 10_000;
+    });
+
+    // Contract still answers queries
+    assert_eq!(s.council.get_threshold(), 2);
+    assert_eq!(s.council.get_action_count(), 0);
+    assert_eq!(s.council.get_members().len(), 3);
 }

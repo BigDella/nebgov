@@ -88,6 +88,11 @@ The core governance contract that manages:
 - `GovernorUpgraded`: Contract upgraded
 - `ReputationUpdated`: A proposer's reputation score changed
 - `EffectiveThresholdChanged`: A proposer's reputation-adjusted proposal threshold changed
+- `CommitPhaseStarted` / `VoteCommitted` / `VoteRevealed`: Two-phase commit-reveal voting
+
+#### Commit-reveal voting
+
+When `use_commit_reveal` is enabled, proposals created afterward run in two windows: a commit phase that records only a salted hash, followed by a reveal phase that verifies the preimage and applies the vote. Direct `cast_vote` is disabled for those proposals. See [commit-reveal.md](./commit-reveal.md) for the threat model, timing formula, exact preimage encoding, unrevealed-commit behavior, and SDK walkthrough.
 
 #### Proposer reputation
 
@@ -199,7 +204,7 @@ unbounded per-epoch voter list is stored:
   the current epoch has ended
 - `fund_pool` adds reward tokens; `get_available_pool` is the balance not yet allocated to a published epoch
 - `sweep_epoch` (admin) returns an epoch's unclaimed rewards to the available pool
-- `set_admin` and `update_epoch_duration` (admin) rotate the admin and change the duration of future epochs
+- `propose_admin` / `accept_admin` (two-step admin rotation) and `update_epoch_duration` (admin) change authority and the duration of future epochs
 
 **Depends on:** only the reward token (a SEP-41 token contract). Its admin should be set to the governor, so it must
 be deployed and initialized after the governor (`scripts/deploy-testnet.sh` does this).
@@ -242,7 +247,8 @@ for the full lifecycle.
 
 - `lock_bond` takes the bond from the proposer, keyed by the proposal's `description_hash`
 - `refund_bond` returns the bond after the governor proposal resolves; `slash` sends it to a recipient instead
-- `update_bond_amount` (admin) changes the required bond; `get_bond` and `get_settings` read the state
+- `update_bond_amount` (admin) changes the required bond; `update_settings` (admin) changes the bond token, governor
+  and refund windows; `set_admin` (admin) hands over the admin role; `get_bond` and `get_settings` read the state
 
 **Depends on:** a SEP-41 bond token, and the governor, whose proposal state decides whether a bond is refunded.
 
@@ -251,6 +257,8 @@ for the full lifecycle.
 - `BondRefunded`: Bond returned to a proposer
 - `BondSlashed`: Bond confiscated
 - `BondAmountUpdated`: Required bond amount changed
+- `SettingsUpdated`: Bond token, governor or refund windows changed
+- `AdminUpdated`: Admin role handed over
 
 #### Optimistic-Governor Contract
 The optimistic proposal track (`contracts/optimistic-governor/`). A proposal passes unless enough objections are
@@ -259,7 +267,10 @@ cast during its challenge window. See [Optimistic Governance](./optimistic-gover
 - `propose` opens a proposal with a challenge window and takes a proposer bond
 - `object` records an objection; an objected proposal is blocked
 - `finalize` settles a proposal that was not blocked, and `execute` calls its target contract
-- `cancel` lets the proposer withdraw before the proposal passes, which refunds the bond; `update_config` (admin) changes the parameters
+- `cancel` lets the proposer withdraw before the proposal passes. It refunds the bond only if the proposal was not
+  objected; an objected proposal's bond stays locked
+- `release_bond` / `slash_bond` (admin, meant to be governance) return an objected proposal's bond to its proposer or
+  send it to a recipient; `update_config` (admin) changes the parameters
 
 **Depends on:** a SEP-41 bond token, the votes token used to read objector weight, and the target contract of each
 proposal it executes.
@@ -271,6 +282,7 @@ proposal it executes.
 - `ProposalPassed`: Challenge window ended without a blocking objection
 - `ProposalExecuted`: Proposal executed on its target
 - `ProposalCancelled`: Proposal withdrawn by its proposer
+- `BondReleased` / `BondSlashed`: An objected proposal's bond returned to its proposer or slashed
 - `ConfigUpdated`: Parameters changed
 
 #### Conviction-Voting Contract
@@ -331,6 +343,7 @@ rules and errors.
 - `create_stream` is governor-only. It sets up the stream and moves no funds
 - `execute_stream` is permissionless and pays every whole interval that has come due
 - `pause_stream`, `resume_stream` and `cancel_stream` are callable by the treasury (the admin) or the stream's creator
+- a stream that has paid its last whole interval is marked `completed` and removed from `get_active_streams`
 
 **Depends on:** a SEP-41 asset that the treasury transfers into the contract. The contract pays from its own balance.
 
@@ -341,6 +354,7 @@ rules and errors.
 - `StrmExec`: Whole intervals paid
 - `StrmPaused` / `StrmResumed`: Stream paused or resumed
 - `StrmCancel`: Stream cancelled
+- `StrmCompleted`: Last whole interval paid; stream removed from the active list
 
 ### Voting-weight sources
 
@@ -359,6 +373,7 @@ other (a `Single` strategy pointing at one of them). Voting weight is always rea
 which is why vote-escrow keeps lock history and global checkpoints. Changing the strategy is done with
 `set_voting_strategy`, which requires the governor's own authorization, so it goes through a governance proposal.
 Under `MultiToken`, a source that errors is counted as zero rather than failing the vote.
+`token-votes` can add a time-based voting-power bonus and prune old checkpoints; see [parameter-guide.md](./parameter-guide.md#token-votes-time-weighting) for the formula, defaults, and snapshot-safety guidance.
 
 ### Indexer Service
 
@@ -414,6 +429,8 @@ The backend API serves as the primary interface for the frontend application:
 - Implements business logic
 - Handles authentication and authorization
 - Provides optimized queries for frontend use
+
+The API also hosts [proposal amendments](./proposal-amendments.md) for Pending-proposal versioning and diffs, and the [notification engine](./notifications.md), which evaluates indexed events against user rules and delivers in-app, email, webhook, and Telegram alerts.
 
 ### Frontend Web App
 
